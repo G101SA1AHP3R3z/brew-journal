@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Brew Journal ☕</title>
+    <meta name="theme-color" content="#f59e0b" />
+    <link rel="manifest" href="manifest.json" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>html, body, #root { height: 100%; }</style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="text/babel" data-presets="env,react,typescript">
+/* @ts-nocheck */
+const { useEffect, useMemo, useRef, useState } = React;
+const OZ_TO_ML = 29.5735;
+const CUP_TO_ML = 236.588;
+const mlToOz = (ml) => ml / OZ_TO_ML;
+const fmt = (n, d = 0) => (Number.isFinite(Number(n)) ? Number(n).toFixed(d) : "-");
+const fmtTime = (sec) => { const m = Math.floor(sec / 60); const s = Math.floor(sec % 60); return m + ":" + String(s).padStart(2, "0"); };
+const cx = (...arr) => arr.filter(Boolean).join(" ");
+function normalizeNumberText(txt) { const s = String(txt).trim().replace(/,/g, "."); if (s === "") return ""; const n = Number(s); return Number.isFinite(n) ? String(n) : ""; }
+function themeTokens(isDark) { return { pageBg: isDark ? "bg-zinc-950 text-zinc-50" : "bg-amber-50 text-zinc-900", headerBg: isDark ? "bg-zinc-900/70 border-white/5" : "bg-white/80 border-black/5", card: isDark ? "bg-zinc-900/70 ring-white/5" : "bg-white/80 ring-black/5", ring: isDark ? "ring-zinc-700" : "ring-zinc-200", border: isDark ? "border-zinc-700" : "border-zinc-200", tabOn: isDark ? "bg-zinc-100 text-zinc-900 ring-1 ring-zinc-100" : "bg-stone-900 text-white ring-1 ring-stone-900", tabOff: isDark ? "ring-1 ring-zinc-700" : "ring-1 ring-zinc-200", progressTrail: isDark ? "bg-zinc-800" : "bg-amber-100", progressFill: isDark ? "bg-zinc-100" : "bg-amber-600", delHover: isDark ? "hover:bg-red-900/20" : "hover:bg-red-50", subtleText: isDark ? "text-zinc-400" : "text-zinc-500", }; }
+const METHODS = ["Chemex/Drip", "French Press", "Espresso", "Moka Pot", "Cold Brew"];
+const TASTES = ["Citrusy / Crisp", "Balanced / Sweet", "Chocolatey / Rich", "Floral / Delicate", "Bold / Syrupy"];
+const GRIND_STEPS = ["Extra Coarse","Coarse","Medium-Coarse","Medium","Medium-Fine","Fine","Extra Fine"];
+const baseGrindForMethod = (m) => ({"French Press":"Coarse","Chemex/Drip":"Medium",Espresso:"Fine","Moka Pot":"Medium-Fine","Cold Brew":"Extra Coarse"}[m] || "Medium");
+const shiftGrind = (base, d) => { const i = GRIND_STEPS.indexOf(base); const ni = Math.min(Math.max(i + d, 0), GRIND_STEPS.length - 1); return GRIND_STEPS[ni]; };
+const roastBaseTemp = (roast, method) => ({"Chemex/Drip": roast==="Light"?95:roast==="Medium"?93:90,"French Press":roast==="Light"?94:roast==="Medium"?92:89,Espresso:roast==="Light"?93:roast==="Medium"?92:90,"Moka Pot":roast==="Light"?98:roast==="Medium"?97:96,"Cold Brew":20}[method] ?? 93);
+const tasteAdjust = (taste, method) => { const isEspresso = method === "Espresso"; return ({"Citrusy / Crisp":{tempDelta:isEspresso?-1:-2,grindDelta:-1,note:"cooler & slightly coarser for brightness"},"Balanced / Sweet":{tempDelta:0,grindDelta:0,note:"baseline for rounded sweetness"},"Chocolatey / Rich":{tempDelta:isEspresso?+1:+2,grindDelta:+1,note:"hotter & a tad finer for body"},"Floral / Delicate":{tempDelta:isEspresso?-1:-1,grindDelta:-1,note:"slightly cooler & coarser for aromatics"},"Bold / Syrupy":{tempDelta:isEspresso?+2:+2,grindDelta:+2,note:"hotter & finer for syrupy texture"}}[taste]) || { tempDelta:0, grindDelta:0, note:"" }; };
+const buildChemexSchedule = (totalMl, doseG) => { const pct=[0.1333333333,0.4,2/3,0.8666666667,1.0]; const times=[0,45,105,165,220,250,360]; const round=Math.round; const s=[{label:"Bloom",timeSec:times[0],targetMl:round(totalMl*pct[0]),type:"bloom"},{label:"Pour to ~40%",timeSec:times[1],targetMl:round(totalMl*pct[1]),type:"pour"},{label:"Pour to ~67%",timeSec:times[2],targetMl:round(totalMl*pct[2]),type:"pour"},{label:"Pour to ~87%",timeSec:times[3],targetMl:round(totalMl*pct[3]),type:"pour"},{label:"Final pour to 100%",timeSec:times[4],targetMl:round(totalMl*pct[4]),type:"pour"},{label:"Drawdown (no pour)",timeSec:times[5],targetMl:round(totalMl*pct[4]),type:"drawdown",noPour:true},{label:"Drawdown complete",timeSec:times[6],targetMl:round(totalMl*pct[4]),type:"drawdown",noPour:true},]; const pours=s.filter(x=>x.type==="pour"); for(let i=1;i<pours.length;i++) if(pours[i].targetMl<=pours[i-1].targetMl) pours[i].targetMl=pours[i-1].targetMl+5; const minBloom=Math.round(doseG*2); if(s[0].targetMl<minBloom-20) s[0].targetMl=minBloom; return s; };
+const getCurrentStepIndex = (steps, elapsedSec) => { if(!steps||!steps.length) return -1; for(let i=0;i<steps.length;i++){ const start=steps[i].timeSec; const end=i+1<steps.length?steps[i+1].timeSec:Infinity; if(elapsedSec>=start && elapsedSec<end) return i;} return steps.length-1; };
+const DEFAULTS={method:"Chemex/Drip",inputMode:"cups",cups:2,yieldMl:400,doseG:25,ratio:16,tempC:94,grind:"Medium",roast:"Medium",taste:"Balanced / Sweet",autoTune:true,origin:""};
+const methodDefaults = (m) => ({"French Press":{ratio:15,grind:"Coarse"},Espresso:{ratio:2,grind:"Fine"},"Moka Pot":{ratio:9,grind:"Medium-Fine"},"Cold Brew":{ratio:8,grind:"Extra Coarse"}}[m]||{ratio:16,grind:"Medium"});
+function useCalc(){const [s,setS]=useState(()=>{try{return JSON.parse(localStorage.getItem("coffee-calc-v3")||"null")||DEFAULTS;}catch{return DEFAULTS;}});
+  useEffect(()=>localStorage.setItem("coffee-calc-v3",JSON.stringify(s)),[s]);
+  const mass=React.useMemo(()=>{let y=s.yieldMl,d=s.doseG; if(s.inputMode==="cups"){y=Math.min(Math.max(s.cups,0),12)*CUP_TO_ML; d=y/s.ratio;} else if(s.inputMode==="yield"){d=s.yieldMl/s.ratio;} else {y=s.doseG*s.ratio;} return {yieldMl:y,doseG:d};},[s]);
+  const adj=React.useMemo(()=>tasteAdjust(s.taste,s.method),[s.taste,s.method]);
+  const baseT=React.useMemo(()=>roastBaseTemp(s.roast,s.method),[s.roast,s.method]);
+  const effT=s.autoTune?Math.min(Math.max(baseT+adj.tempDelta,80),100):s.tempC;
+  const effG=s.autoTune?shiftGrind(baseGrindForMethod(s.method),adj.grindDelta):s.grind;
+  useEffect(()=>{const plan={method:s.method,totalMl:Math.round(mass.yieldMl),doseG:Math.round(mass.doseG*10)/10,ratio:s.ratio,tempC:effT,grind:String(effG),steps:s.method==="Chemex/Drip"?buildChemexSchedule(mass.yieldMl,mass.doseG):[],savedAt:Date.now(),}; localStorage.setItem("coffee-current-plan",JSON.stringify(plan));},[s.method,mass.yieldMl,mass.doseG,s.ratio,effT,effG]);
+  const tips=[]; if(s.method==="Espresso") tips.push("Aim ~1:2 in 25–32s"); if(s.method==="French Press") tips.push("Steep ~4m, plunge slowly"); if(s.method==="Chemex/Drip") tips.push("Bloom ~2× dose for ~45s"); if(s.method==="Moka Pot") tips.push("Preheat water; stop when it sputters"); if(s.method==="Cold Brew") tips.push("12–18h in fridge; dilute to taste"); if(s.roast==="Light") tips.push("Light: hotter/slightly finer"); if(s.roast==="Dark") tips.push("Dark: cooler & slightly coarser"); tips.push(s.autoTune?`Auto tuned: ${effT}°C • ${String(effG)} (${adj.note})`:"Manual overrides active");
+  return {s,setS,mass,effT,effG,tips};}
+const Card=({title,subtitle,actions,children,isDark})=>{const t=themeTokens(isDark); return (<div className={cx("rounded-2xl shadow-lg p-5 backdrop-blur ring-1",t.card)}><div className="flex items-start justify-between gap-3 mb-3"><div><h2 className="text-lg font-semibold tracking-tight">{title}</h2>{subtitle&&<p className={cx("text-xs mt-0.5",t.subtleText)}>{subtitle}</p>}</div>{actions}</div><div>{children}</div></div>);};
+const Btn=({children,onClick,title,isDark})=>{const t=themeTokens(isDark); return (<button className={cx("px-3 py-2 rounded-xl shadow-sm active:scale-95 transition ring-1",t.ring)} onClick={onClick} title={title} type="button">{children}</button>);};
+function CalculatorCard({isDark}){const {s,setS,mass,effT,effG,tips}=useCalc(); const t=themeTokens(isDark);
+  const [doseText,setDoseText]=useState(()=>String(s.doseG)); useEffect(()=>{if(s.inputMode!=="dose") setDoseText(String(s.doseG));},[s.doseG,s.inputMode]);
+  const [cupsText,setCupsText]=useState(()=>String(s.cups)); const [yieldText,setYieldText]=useState(()=>String(s.yieldMl)); useEffect(()=>setCupsText(String(s.cups)),[s.cups,s.inputMode]); useEffect(()=>setYieldText(String(s.yieldMl)),[s.yieldMl,s.inputMode]);
+  return (<Card title="Brew Calculator" subtitle="Method + ratio + roast/taste smart tuning." isDark={isDark} actions={null}>
+    <div className="grid gap-4 md:grid-cols-2"><div className="space-y-3">
+      <label className="block text-sm"><span className={cx(t.subtleText)}>Method</span>
+        <select className={cx("mt-1 w-full rounded-xl px-3 py-2 bg-transparent ring-1",t.ring)} value={s.method} onChange={(e)=>setS((prev)=>({...prev,method:e.target.value,...methodDefaults(e.target.value)}))}>
+          {METHODS.map((m)=>(<option key={m}>{m}</option>))}</select></label>
+      <div className="grid grid-cols-3 gap-2 text-xs">{["cups","yield","dose"].map((mode)=>(<button key={mode} type="button" onClick={()=>setS((p)=>({...p,inputMode:mode}))} className={cx("px-3 py-2 rounded-xl", s.inputMode===mode?t.tabOn:t.tabOff)}>{mode==="cups"?"By cups":mode==="yield"?"By water":"By coffee"}</button>))}</div>
+      {s.inputMode==="cups"&&(<label className="block text-sm"><span className={cx(t.subtleText)}>Cups (8 oz each)</span>
+        <input type="text" inputMode="numeric" placeholder="e.g. 2" value={cupsText} onChange={(e)=>{const raw=e.target.value; setCupsText(raw); const norm=normalizeNumberText(raw); if(norm!==""){const n=Math.max(0,Math.min(12,Math.floor(Number(norm)))); setS((p)=>({...p,cups:n}));}}}
+          onBlur={()=>{const norm=normalizeNumberText(cupsText); if(norm===""){setCupsText(String(s.cups));} else {const n=Math.max(0,Math.min(12,Math.floor(Number(norm)))); setCupsText(String(n)); setS((p)=>({...p,cups:n}));}}}
+          className={cx("mt-1 w-full rounded-xl px-3 py-2 bg-transparent ring-1",t.ring)} /></label>)}
+      {s.inputMode==="yield"&&(<label className="block text-sm"><span className={cx(t.subtleText)}>Water (ml)</span>
+        <input type="text" inputMode="decimal" placeholder="e.g. 400" value={yieldText} onChange={(e)=>{const raw=e.target.value; setYieldText(raw); const norm=normalizeNumberText(raw); if(norm!=="") setS((p)=>({...p,yieldMl:Math.max(0,Number(norm))}));}}
+          onBlur={()=>{const norm=normalizeNumberText(yieldText); if(norm===""){setYieldText(String(s.yieldMl));} else {const n=Math.max(0,Number(norm)); setYieldText(String(n)); setS((p)=>({...p,yieldMl:n}));}}}
+          className={cx("mt-1 w-full rounded-xl px-3 py-2 bg-transparent ring-1",t.ring)} />
+        <div className={cx("inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-100 text-amber-900 mt-1")}>≈ {fmt(mlToOz(s.yieldMl),1)} oz</div></label>)}
+      {s.inputMode==="dose"&&(<label className="block text-sm"><span className={cx(t.subtleText)}>Coffee dose (g)</span>
+        <input type="text" inputMode="decimal" placeholder="e.g. 18 or 50" value={doseText} onChange={(e)=>{const raw=e.target.value; setDoseText(raw); const norm=normalizeNumberText(raw); if(norm!=="") setS((p)=>({...p,doseG:Math.max(0,Number(norm))}));}}
+          onBlur={()=>{const norm=normalizeNumberText(doseText); if(norm===""){setDoseText(String(s.doseG));} else {const n= Math.max(0,Number(norm)); setDoseText(String(n)); setS((p)=>({...p,doseG:n}));}}}
+          className={cx("mt-1 w-full rounded-xl px-3 py-2 bg-transparent ring-1",t.ring)} /></label>)}
+      <label className="block text-sm"><span className={cx(t.subtleText)}>Ratio (water : coffee)</span>
+        <input type="range" min={s.method==="Espresso"?1.5:12} max={s.method==="Espresso"?3.0:20} step={s.method==="Espresso"?0.1:1} value={s.ratio}
+          onChange={(e)=>setS((p)=>({...p,ratio:Number(e.target.value)}))} className="mt-2 w-full" />
+        <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-100 text-amber-900 mt-1">Current: 1:{s.ratio}</div></label>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="text-sm"><span className={cx(t.subtleText)}>Roast</span>
+          <select className={cx("mt-1 w-full rounded-xl px-3 py-2 bg-transparent ring-1",t.ring)} value={s.roast} onChange={(e)=>setS((p)=>({...p,roast:e.target.value}))}>
+            <option>Light</option><option>Medium</option><option>Dark</option></select></label>
+        <label className="text-sm"><span className={cx(t.subtleText)}>Taste goal</span>
+          <select className={cx("mt-1 w-full rounded-xl px-3 py-2 bg-transparent ring-1",t.ring)} value={s.taste} onChange={(e)=>setS((p)=>({...p,taste:e.target.value}))}>
+            {TASTES.map((t)=>(<option key={t}>{t}</option>))}</select></label>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="text-sm"><span className={cx(t.subtleText)}>Water temp (°C)</span>
+          <input type="number" value={Math.min(Math.max(roastBaseTemp(s.roast,s.method)+tasteAdjust(s.taste,s.method).tempDelta,80),100)} disabled
+            className={cx("mt-1 w-full rounded-xl px-3 py-2 bg-transparent opacity-60 cursor-not-allowed ring-1",t.ring)} />
+          <div className={cx("text-[11px] mt-1",t.subtleText)}>Auto (roast + taste)</div></label>
+        <label className="text-sm"><span className={cx(t.subtleText)}>Grind</span>
+          <input value={String(shiftGrind(baseGrindForMethod(s.method),tasteAdjust(s.taste,s.method).grindDelta))} disabled
+            className={cx("mt-1 w-full rounded-xl px-3 py-2 bg-transparent opacity-60 cursor-not-allowed ring-1",t.ring)} />
+          <div className={cx("text-[11px] mt-1",t.subtleText)}>Auto (method + taste)</div></label>
+      </div>
+    </div>
+    <div className="space-y-3">
+      <div className="grid grid-cols-3 gap-3">
+        <div className={cx("rounded-xl p-3 text-center ring-1",t.ring)}><div className={cx("text-xs",t.subtleText)}>Coffee</div><div className="text-2xl font-semibold">{fmt(mass.doseG,1)}g</div></div>
+        <div className={cx("rounded-xl p-3 text-center ring-1",t.ring)}><div className={cx("text-xs",t.subtleText)}>Water</div><div className="text-2xl font-semibold">{fmt(mass.yieldMl,0)}ml</div><div className={cx("text-[10px]",t.subtleText)}>≈ {fmt(mlToOz(mass.yieldMl),1)} oz</div></div>
+        <div className={cx("rounded-xl p-3 text-center ring-1",t.ring)}><div className={cx("text-xs",t.subtleText)}>Target time</div><div className="text-2xl font-semibold">{s.method==="Espresso"?"25–32s":s.method==="French Press"?"~4:00":s.method==="Cold Brew"?"12–18h":s.method==="Chemex/Drip"?"~4:10–6:00":"3:30–4:00"}</div></div>
+      </div>
+      {s.method==="Chemex/Drip"&&(<div className={cx("rounded-xl p-3 border", themeTokens(isDark).border)}>
+        <div className={cx("text-xs font-medium mb-1", themeTokens(isDark).subtleText)}>Pour schedule (by seconds)</div>
+        <ul className="text-sm space-y-1 list-disc pl-5">{buildChemexSchedule(mass.yieldMl,mass.doseG).map((st,i)=>(<li key={i}><span className="font-medium">{fmtTime(st.timeSec)}</span> – {st.label}{st.noPour?(<span className={cx(themeTokens(isDark).subtleText)}> — wait</span>):(<>: to <span className="font-medium">{st.targetMl}ml</span></>)}</li>))}</ul>
+        <div className={cx("text-[11px] mt-1", themeTokens(isDark).subtleText)}>Tip: finish all water by ~3:40–4:10, then let it draw down until ~6:00.</div></div>)}
+      {s.method==="French Press"&&(<div className={cx("rounded-xl p-3 border", themeTokens(isDark).border)}>
+        <div className={cx("text-xs font-medium mb-1", themeTokens(isDark).subtleText)}>Suggested steps</div>
+        <ul className="text-sm space-y-1 list-disc pl-5"><li>0:00 Add coffee, pour {fmt(mass.yieldMl,0)}ml at {Math.round(roastBaseTemp(s.roast,s.method)+tasteAdjust(s.taste,s.method).tempDelta)}°C</li><li>0:15 Stir gently</li><li>4:00 Plunge slowly</li></ul></div>)}
+      {s.method==="Espresso"&&(<div className={cx("rounded-xl p-3 border", themeTokens(isDark).border)}>
+        <div className={cx("text-xs font-medium mb-1", themeTokens(isDark).subtleText)}>Suggested espresso target</div>
+        <ul className="text-sm space-y-1 list-disc pl-5"><li>Aim for ~1:{s.ratio} in 25–32s</li><li>Keep temp ~{Math.round(roastBaseTemp(s.roast,s.method)+tasteAdjust(s.taste,s.method).tempDelta)}°C</li></ul></div>)}
+      <div className="rounded-2xl p-3 bg-amber-100/70 border border-amber-200"><div className="text-xs font-medium text-amber-800 mb-1">Tips</div>
+        <ul className="text-sm space-y-1 text-amber-900">{tips.map((t,i)=>(<li key={i}>{t}</li>))}</ul></div>
+    </div></div></Card>);}
+function TimerCard({isDark}){const [plan,setPlan]=useState(null); const [elapsed,setElapsed]=useState(0); const [running,setRunning]=useState(false); const tickRef=useRef(null); const t=themeTokens(isDark);
+  const loadPlan=()=>{const raw=localStorage.getItem("coffee-current-plan"); if(raw) setPlan(JSON.parse(raw));};
+  useEffect(loadPlan,[]);
+  useEffect(()=>{ if(!running) return; const start=performance.now()-elapsed*1000; const loop=()=>{ setElapsed((performance.now()-start)/1000); tickRef.current=requestAnimationFrame(loop); }; tickRef.current=requestAnimationFrame(loop); return ()=>cancelAnimationFrame(tickRef.current); },[running]);
+  const currentIndex=React.useMemo(()=>getCurrentStepIndex(plan?.steps||[],elapsed),[elapsed,plan]);
+  const lastSec=plan && plan.steps && plan.steps.length ? plan.steps[plan.steps.length-1].timeSec : 1;
+  return (<Card title="Brew Timer" subtitle="Start the clock and follow the schedule." actions={<Btn onClick={loadPlan} isDark={isDark}>Reload plan</Btn>} isDark={isDark}>
+    {!plan ? (<div className={cx("text-sm",t.subtleText)}>No plan yet. Adjust the calculator, then press <em>Reload plan</em>.</div>) : (<div className="space-y-3">
+      <div className={cx("text-sm",t.subtleText)}>{plan.method} • {plan.totalMl}ml • {plan.doseG}g • 1:{plan.ratio} • {plan.tempC}°C • {plan.grind}</div>
+      <div className="flex items-center gap-3"><div className="text-5xl font-semibold tabular-nums w-32 text-center">{fmtTime(elapsed)}</div>
+        {!running ? (<Btn onClick={()=>setRunning(true)} isDark={isDark}>Start</Btn>) : (<Btn onClick={()=>setRunning(false)} isDark={isDark}>Pause</Btn>)}
+        <Btn onClick={()=>{setRunning(False); setElapsed(0);}} isDark={isDark}>Reset</Btn></div>
+      <div className={cx("w/full h-2 rounded-full overflow-hidden", t.progressTrail)}><div className={cx("h-full",t.progressFill)} style={{width: Math.min((elapsed/lastSec)*100,100)+"%"}}/></div>
+      {plan.steps && plan.steps.length ? (<ul className="text-sm space-y-2">{plan.steps.map((st,i)=>{const current=i===currentIndex; const done=i<currentIndex; return (
+        <li key={i} className={cx("rounded-xl p-2 border", done?"border-green-300 bg-green-50": current?"border-amber-300 bg-amber-50": t.border)}>
+          <div className="flex items-center justify-between"><div><span className="font-medium mr-2">{fmtTime(st.timeSec)}</span>{st.label}</div><div className={cx("text-xs",t.subtleText)}>{st.noPour?"— wait —":`to ${st.targetMl}ml`}</div></div>
+        </li>);})}</ul>) : (<div className={cx("text-sm",t.subtleText)}>No scheduled steps for this method.</div>)}
+    </div>)}</Card>);}
+function useJournal(){const [entries,setEntries]=useState(()=>{try{return JSON.parse(localStorage.getItem("coffee-journal-v1")||"[]");}catch{return[];}}); useEffect(()=>localStorage.setItem("coffee-journal-v1",JSON.stringify(entries)),[entries]); return {entries,setEntries};}
+const Stars=({value,onChange})=>(<div className="flex items-center gap-1">{Array.from({length:5}).map((_,i)=>(<button key={i} onClick={()=>onChange&&onChange(i+1)} className="p-1" aria-label={`Rate ${i+1}`} type="button"><span className={cx("text-lg", value>=i+1?"text-yellow-400":"text-zinc-400")}>★</span></button>))}</div>);
+function JournalCard({isDark}){const {entries,setEntries}=useJournal(); const [coffeeName,setCoffeeName]=useState(""); const [notes,setNotes]=useState(""); const [rating,setRating]=useState(0); const [snapshot,setSnapshot]=useState({plan:null,calc:null}); const t=themeTokens(isDark);
+  function loadSnapshot(){const plan=JSON.parse(localStorage.getItem("coffee-current-plan")||"null"); const calc=JSON.parse(localStorage.getItem("coffee-calc-v3")||"null"); setSnapshot({plan,calc});}
+  React.useEffect(loadSnapshot,[]);
+  function addFromCurrent(){const {plan,calc}=snapshot; if(!plan){alert("No current brew found. Adjust the calculator and click Reload."); return;} const now=new Date(); const e={id:(typeof crypto!=="undefined"&&crypto.randomUUID?crypto.randomUUID():("id-"+Math.random().toString(36).slice(2)+Date.now())), date:now.toISOString(), method:plan.method, coffee:coffeeName||"", origin:calc?.origin||"", roast:calc?.roast||"Medium", doseG:Number(plan.doseG||0), waterMl:Number(plan.totalMl||0), ratio:Number(plan.ratio||16), grind:plan.grind||"", tempC:Number(plan.tempC||93), notes:notes||"", rating:Number(rating||0)}; setEntries((p)=>[e,...p]); setCoffeeName(""); setNotes(""); setRating(0);}
+  const remove=(id)=>setEntries((p)=>p.filter((e)=>e.id!==id));
+  const exportJson=()=>{const blob=new Blob([JSON.stringify(entries,null,2)],{type:"application/json"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`coffee-journal-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url);};
+  const importJson=(file)=>{const r=new FileReader(); r.onload=()=>{try{const data=JSON.parse(String(r.result)); if(Array.isArray(data)) setEntries(data);}catch{}}; r.readAsText(file);};
+  return (<Card title="Journal" subtitle="One-click: grab details from the Brew Calculator."
+    actions={<div className="flex items-center gap-2"><Btn onClick={exportJson} title="Export JSON" isDark={isDark}>Export JSON</Btn>
+      <label className="relative inline-flex items-center"><input type="file" accept="application/json" className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e)=>e.target.files && importJson(e.target.files[0])} />
+        <span><Btn title="Import JSON" isDark={isDark}>Import JSON</Btn></span></label></div>} isDark={isDark}>
+    <div className="grid gap-3 md:grid-cols-2"><div className="space-y-3">
+      <div className={cx("rounded-xl p-3 border", t.border)}>
+        <div className="flex items-center justify-between"><div className="text-sm font-medium">Current calculator</div><Btn onClick={loadSnapshot} title="Reload snapshot" isDark={isDark}>Reload</Btn></div>
+        {snapshot.plan ? (<div className="mt-2 text-sm grid grid-cols-2 gap-2">
+          <div>Method: <span className="font-medium">{snapshot.plan.method}</span></div>
+          <div>Ratio: <span className="font-medium">1:{snapshot.plan.ratio}</span></div>
+          <div>Dose: <span className="font-medium">{fmt(snapshot.plan.doseG,1)}g</span></div>
+          <div>Water: <span className="font-medium">{fmt(snapshot.plan.totalMl,0)}ml</span></div>
+          <div>Temp: <span className="font-medium">{snapshot.plan.tempC}°C</span></div>
+          <div>Grind: <span className="font-medium">{snapshot.plan.grind}</span></div>
+          <div className={cx("col-span-2 text-xs", t.subtleText)}>Origin: {snapshot.calc?.origin || "—"} • Roast: {snapshot.calc?.roast || "—"}</div>
+        </div>):(<div className={cx("text-sm mt-2", t.subtleText)}>No plan yet. Adjust the calculator first.</div>)}
+      </div>
+      <label className="text-sm"><span className={cx(t.subtleText)}>Coffee name (optional)</span>
+        <input value={coffeeName} onChange={(e)=>setCoffeeName(e.target.value)} className={cx("mt-1 w-full rounded-xl bg-transparent px-3 py-2 ring-1", themeTokens(isDark).ring)} /></label>
+      <label className="text-sm"><span className={cx(t.subtleText)}>Notes</span>
+        <textarea value={notes} onChange={(e)=>setNotes(e.target.value)} rows={4} className={cx("mt-1 w-full rounded-xl bg-transparent px-3 py-2 ring-1", themeTokens(isDark).ring)} placeholder="Taste, adjustments, etc." /></label>
+      <div className="flex items-center justify-between"><div className={cx("text-sm", t.subtleText)}>Rating</div><Stars value={rating} onChange={(v)=>setRating(v)} /></div>
+      <Btn onClick={addFromCurrent} isDark={isDark}>Add current brew</Btn>
+    </div>
+    <div className="space-y-2 max-h-[420px] overflow-auto pr-1">
+      {entries.length===0 && (<div className={cx("text-sm", t.subtleText)}>No entries yet. Click <em>Add current brew</em> to save one.</div>)}
+      {entries.map((e)=>(<div key={e.id} className={cx("rounded-xl p-3 border", t.border)}>
+        <div className="flex items-start justify-between">
+          <div><div className="text-sm font-medium">{e.method} • {new Date(e.date).toLocaleString()}</div>
+            <div className={cx("text-xs", t.subtleText)}>{e.coffee || "Unnamed"}{e.origin?` — ${e.origin}`:""} • {e.roast} roast</div></div>
+          <button className={cx("p-1 rounded-md", t.delHover)} onClick={()=>remove(e.id)} aria-label="Delete" type="button">🗑️</button></div>
+        <div className="mt-2 text-sm grid grid-cols-2 gap-2"><div> Dose: <span className="font-medium">{fmt(e.doseG,1)}g</span></div><div> Water: <span className="font-medium">{fmt(e.waterMl,0)}ml</span></div><div> Ratio: <span className="font-medium">1:{e.ratio}</span></div><div> Temp: <span className="font-medium">{e.tempC}°C</span></div></div>
+        {e.notes && <div className="mt-2 text-sm whitespace-pre-wrap">{e.notes}</div>}
+        <div className="mt-2"><Stars value={e.rating} /></div></div>))}
+    </div></div></Card>);}
+function BrewJournalApp(){const [tab,setTab]=useState(()=>localStorage.getItem("coffee-tab")||"brew"); const [theme,setTheme]=useState(()=>{try{return window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";}catch{return "light";}}); const isDark=theme==="dark";
+  React.useEffect(()=>localStorage.setItem("coffee-tab",tab),[tab]); React.useEffect(()=>localStorage.setItem("coffee-theme",theme),[theme]); const t=themeTokens(isDark);
+  return (<div className={cx("min-h-screen", t.pageBg)}>
+    <header className={cx("sticky top-0 z-10 backdrop-blur border", t.headerBg)}>
+      <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
+        <div className={cx("h-10 w-10 rounded-2xl ring-1 bg-white flex items-center justify-center", t.ring)}>☕</div>
+        <div className="flex-1"><h1 className="text-xl font-bold tracking-tight">Brew Journal</h1>
+          <p className={cx("text-xs", t.subtleText)}>{tab==="brew"?"Calculator • Timer • Journal":"Espresso guide"}</p></div>
+        <div className="flex items-center gap-2">
+          <button onClick={()=>setTab("brew")} className={cx("px-3 py-1.5 rounded-xl text-sm", tab==="brew"?t.tabOn:t.tabOff)} type="button">Brew</button>
+          <button onClick={()=>setTab("guide")} className={cx("px-3 py-1.5 rounded-xl text-sm", tab==="guide"?t.tabOn:t.tabOff)} type="button">Espresso Guide</button>
+          <button className={cx("px-3 py-1.5 rounded-xl text-sm ring-1", t.ring)} onClick={()=>setTheme((v)=>(v==="dark"?"light":"dark"))} type="button">{isDark?"Light":"Dark"} mode</button>
+        </div>
+      </div>
+    </header>
+    <main className="max-w-6xl mx-auto px-4 py-6">{tab==="brew" ? (<div className="grid gap-5 md:grid-cols-2">
+      <CalculatorCard isDark={isDark} /><TimerCard isDark={isDark} /><div className="md:col-span-2"><JournalCard isDark={isDark} /></div>
+    </div>) : (<div className="max-w-6xl mx-auto px-4 py-6"><div className={cx("rounded-xl p-4 border", t.border)}>
+      <div className="grid md:grid-cols-2 gap-2 text-sm">
+        {[
+          { name: "Ristretto", components: "~20g in → ~20–25g out", build: "Short, concentrated shot" },
+          { name: "Espresso", components: "~18g in → ~36g out", build: "1:2 ratio in 25–32s" },
+          { name: "Lungo", components: "~18g in → 45–60g out", build: "Pulled longer, milder" },
+          { name: "Americano", components: "Espresso + hot water", build: "1:2–1:3 espresso:water" },
+          { name: "Macchiato", components: "Espresso + dollop of foam", build: "Marked with foam" },
+          { name: "Cortado", components: "Espresso + equal milk", build: "~1:1 milk to espresso" },
+          { name: "Flat White", components: "Espresso + thin microfoam", build: "~1:2 milk; little foam" },
+          { name: "Cappuccino", components: "Espresso + milk + foam", build: "~1:1:1 espresso:milk:foam" },
+          { name: "Latte", components: "Espresso + steamed milk", build: "~1:3–1:5 milk; light foam" },
+          { name: "Mocha", components: "Latte + chocolate", build: "Add chocolate before milk" },
+        ].map((d)=>(<div key={d.name} className={cx("rounded-xl p-3 border", t.border)}><div className="font-medium">{d.name}</div><div className={cx("text-xs", t.subtleText)}>{d.components}</div><div className="mt-1">{d.build}</div></div>))}
+      </div></div></div>)}</main>
+    <footer className={cx("max-w-6xl mx-auto px-4 pb-8 text-xs", t.subtleText)}><div className="flex items-center justify-between">
+      <span>📝 Local-only storage. Export JSON to back up.</span><span className="text-amber-700">Enjoy the craft. ☕</span></div></footer>
+  </div>);}
+ReactDOM.createRoot(document.getElementById("root")).render(<BrewJournalApp />);
+if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("./sw.js").catch(()=>{});});}
+    </script>
+  </body>
+</html>
